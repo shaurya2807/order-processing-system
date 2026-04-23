@@ -3,7 +3,10 @@
     "allow": [
       "Bash(go build *)",
       "Bash(go mod *)",
-      "Bash(go vet *)"
+      "Bash(go vet *)",
+      "Bash(grep -E '\\\\.\\(go|mod|env|yaml|yml|json|md\\)$')",
+      "Bash(docker compose build *)",
+      "Bash(chmod +x *)"
     ]
   }
 }

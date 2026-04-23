@@ -1,0 +1,87 @@
+networks:
+  app-network:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: orders
+    volumes:
+      - ./init/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  localstack:
+    image: localstack/localstack:3.0.0
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs
+    volumes:
+      - ./init/localstack-init.sh:/etc/localstack/init/ready.d/init.sh
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.order
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/orders-queue
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.inventory
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/orders-queue
+    depends_on:
+      - order-service
+    networks:
+      - app-network
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.notification
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/orders-queue
+    depends_on:
+      - order-service
+    networks:
+      - app-network
