@@ -1,115 +1,67 @@
-# order-processing-system
+# Order Processing System
 
-A production-ready order management microservice built in Go, following clean layered architecture principles.
+Event-driven microservices system built with Go and AWS SQS.
 
 ---
 
 ## Architecture
 
-The service is structured around a strict separation of concerns across four layers:
-
 ```
-HTTP Request
-     │
-     ▼
-┌─────────────┐
-│   Handler   │  Parses and validates HTTP input, writes HTTP responses
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Service   │  Owns business logic and orchestrates domain operations
-└──────┬──────┘
-       │
-       ▼
-┌──────────────────┐
-│   Repository     │  Executes SQL queries against PostgreSQL
-└──────────────────┘
+Client → order-service (REST API, :8080)
+              ↓ PostgreSQL
+              ↓ publishes to SQS
+SQS Queue → inventory-service  (consumer)
+SQS Queue → notification-service (consumer)
 ```
 
-Each layer depends only on the layer below it. Handlers never touch the database; repositories never know about HTTP. This keeps the service easy to test, extend, and reason about.
+A single SQS queue (`orders-queue`) fans out to both consumers. Each consumer independently polls, processes, and deletes messages. LocalStack provides a local SQS emulator so no AWS account is needed.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
+| | |
 |---|---|
-| Language | Go 1.22+ |
-| HTTP Framework | [Gin](https://github.com/gin-gonic/gin) |
-| Database | PostgreSQL (via [pgx v5](https://github.com/jackc/pgx)) |
-| Message Queue | Amazon SQS *(coming soon)* |
-| Logging | [Uber Zap](https://github.com/uber-go/zap) |
-| Containerization | Docker *(coming soon)* |
+| Language | Go 1.26 |
+| HTTP Framework | Gin |
+| Database | PostgreSQL |
+| Message Queue | Amazon SQS (LocalStack) |
+| Logging | Uber Zap |
+| Containerization | Docker |
 
 ---
 
-## Prerequisites
+## How to Run
 
-- **Go** 1.22 or higher
-- **PostgreSQL** 14 or higher running locally
-- A `orders` database created in PostgreSQL
-
-```sql
-CREATE DATABASE orders;
-```
-
-- The following table created in that database:
-
-```sql
-CREATE TABLE orders (
-    id           BIGSERIAL PRIMARY KEY,
-    customer_id  BIGINT        NOT NULL,
-    status       VARCHAR(20)   NOT NULL DEFAULT 'pending',
-    total_amount NUMERIC(10,2) NOT NULL,
-    created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-```
-
----
-
-## Running Locally
-
-**1. Clone the repository**
+**Start everything:**
 
 ```bash
-git clone https://github.com/shaurya2807/order-processing-system.git
-cd order-processing-system
+docker compose up
 ```
 
-**2. Configure environment variables**
+This starts PostgreSQL, LocalStack, order-service, inventory-service, and notification-service. The `orders` table and SQS queue are created automatically on first boot.
 
-Copy the example env file and adjust values to match your local PostgreSQL setup:
+**Create an order (bash):**
 
 ```bash
-cp .env.example .env
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": 42, "total_amount": 129.99}'
 ```
 
-```env
-APP_ENV=development
-SERVER_PORT=8080
+**Create an order (PowerShell):**
 
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_NAME=orders
-DB_SSLMODE=disable
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/orders `
+  -ContentType "application/json" `
+  -Body '{"customer_id": 42, "total_amount": 129.99}'
 ```
 
-**3. Install dependencies**
+**Get an order:**
 
 ```bash
-go mod download
+curl http://localhost:8080/orders/1
 ```
-
-**4. Run the service**
-
-```bash
-go run ./cmd/order-service
-```
-
-The server starts on `http://localhost:8080`.
 
 ---
 
@@ -117,17 +69,15 @@ The server starts on `http://localhost:8080`.
 
 ### `POST /orders`
 
-Creates a new order. New orders are initialized with `pending` status.
+Creates a new order with `pending` status, persists it to PostgreSQL, and publishes an `OrderCreated` event to SQS.
 
-**Request**
+**Request body**
 
-```bash
-curl -X POST http://localhost:8080/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customer_id": 42,
-    "total_amount": 129.99
-  }'
+```json
+{
+  "customer_id": 42,
+  "total_amount": 129.99
+}
 ```
 
 **Response** `201 Created`
@@ -154,13 +104,7 @@ curl -X POST http://localhost:8080/orders \
 
 ### `GET /orders/:id`
 
-Retrieves a single order by its ID.
-
-**Request**
-
-```bash
-curl http://localhost:8080/orders/1
-```
+Retrieves a single order by ID.
 
 **Response** `200 OK`
 
@@ -182,8 +126,6 @@ curl http://localhost:8080/orders/1
 }
 ```
 
-**Order statuses**: `pending` → `processing` → `completed` | `cancelled`
-
 ---
 
 ## Project Structure
@@ -191,32 +133,62 @@ curl http://localhost:8080/orders/1
 ```
 order-processing-system/
 ├── cmd/
-│   └── order-service/
-│       └── main.go              # Entry point — wires dependencies, starts HTTP server
+│   ├── order-service/
+│   │   └── main.go                   # Wires deps, starts HTTP server
+│   ├── inventory-service/
+│   │   └── main.go                   # Starts SQS consumer loop
+│   └── notification-service/
+│       └── main.go                   # Starts SQS consumer loop
 ├── configs/
-│   └── config.go                # Reads environment variables into typed config structs
+│   └── config.go                     # Reads env vars into typed config structs
+├── init/
+│   ├── init.sql                      # Creates orders table on first boot
+│   └── localstack-init.sh            # Creates SQS queue on LocalStack ready
 ├── internal/
 │   ├── handler/
-│   │   └── order_handler.go     # HTTP layer — request parsing, response writing
+│   │   └── order_handler.go          # HTTP layer — request parsing, response writing
+│   ├── inventory/
+│   │   └── consumer.go               # SQS consumer — deducts stock
 │   ├── model/
-│   │   └── order.go             # Domain types: Order, CreateOrderRequest, OrderStatus
+│   │   └── order.go                  # Domain types: Order, CreateOrderRequest
+│   ├── notification/
+│   │   └── consumer.go               # SQS consumer — sends email notification
 │   ├── repository/
-│   │   └── order_repository.go  # Database access — raw SQL via pgx
+│   │   └── order_repository.go       # Database access via pgx
 │   └── service/
-│       └── order_service.go     # Business logic — sits between handler and repository
+│       └── order_service.go          # Business logic — orchestrates handler and repo
 ├── pkg/
-│   └── logger/
-│       └── logger.go            # Zap logger factory (dev vs. production config)
-├── .env                         # Local environment config (git-ignored)
+│   ├── logger/
+│   │   └── logger.go                 # Zap logger factory
+│   └── queue/
+│       └── sqs.go                    # SQS client and OrderCreatedEvent type
+├── Dockerfile.order
+├── Dockerfile.inventory
+├── Dockerfile.notification
+├── docker-compose.yml
+├── .env
 ├── go.mod
 └── go.sum
 ```
 
 ---
 
-## Coming Soon
+## How It Works
 
-- **SQS event publishing** — order lifecycle events (`order.created`, `order.updated`) published to Amazon SQS after each state change
-- **inventory-service consumer** — reserves stock when an order is created; releases on cancellation
-- **notification-service consumer** — sends customer-facing emails and push notifications on order status transitions
-- **Datadog observability** — distributed tracing, APM metrics, and structured log correlation across all consumers
+1. **Order created** — `POST /orders` saves the order to PostgreSQL, then publishes an `OrderCreatedEvent` (order ID, customer ID, total amount) to the `orders-queue` SQS queue.
+
+2. **inventory-service** — polls the queue, receives the event, logs the stock deduction, then deletes the message from SQS.
+
+3. **notification-service** — polls the same queue independently, receives the event, logs an email notification, then deletes the message from SQS.
+
+4. **Failure handling** — if either consumer fails to process a message, it skips the delete step. SQS re-delivers the message after the visibility timeout expires, giving the consumer another attempt automatically.
+
+---
+
+## Key Engineering Decisions
+
+**SQS over direct service calls** — Decouples the order-service from downstream consumers. If inventory-service or notification-service is down, the order still succeeds and the event is durably queued. No consumer restart is required to catch up; SQS holds the messages until they are processed.
+
+**Delete only after successful processing** — Messages are only deleted from SQS once the consumer has fully handled them. A failure before the delete causes the message to re-appear after the visibility timeout, giving automatic at-least-once retry without any custom retry logic.
+
+**Structured logging with Zap** — Every event (order received, stock deducted, notification sent, message deleted) is logged as a structured JSON field set rather than a formatted string. This makes logs queryable in any log aggregation system and avoids string-formatting overhead in the hot path.
