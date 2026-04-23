@@ -6,16 +6,18 @@ import (
 
 	"github.com/shaurya2807/order-processing-system/internal/model"
 	"github.com/shaurya2807/order-processing-system/internal/repository"
+	"github.com/shaurya2807/order-processing-system/pkg/queue"
 	"go.uber.org/zap"
 )
 
 type OrderService struct {
-	repo   *repository.OrderRepository
-	logger *zap.Logger
+	repo      *repository.OrderRepository
+	publisher *queue.Publisher
+	logger    *zap.Logger
 }
 
-func NewOrderService(repo *repository.OrderRepository, logger *zap.Logger) *OrderService {
-	return &OrderService{repo: repo, logger: logger}
+func NewOrderService(repo *repository.OrderRepository, publisher *queue.Publisher, logger *zap.Logger) *OrderService {
+	return &OrderService{repo: repo, publisher: publisher, logger: logger}
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRequest) (*model.Order, error) {
@@ -31,6 +33,23 @@ func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRe
 	}
 
 	s.logger.Info("order created", zap.Int64("order_id", order.ID))
+
+	event := queue.OrderCreatedEvent{
+		OrderID:     order.ID,
+		CustomerID:  order.CustomerID,
+		TotalAmount: order.TotalAmount,
+		Status:      string(order.Status),
+		CreatedAt:   order.CreatedAt,
+	}
+	if pubErr := s.publisher.PublishOrderCreated(ctx, event); pubErr != nil {
+		s.logger.Error("failed to publish order created event",
+			zap.Int64("order_id", order.ID),
+			zap.Error(pubErr),
+		)
+	} else {
+		s.logger.Info("order created event published", zap.Int64("order_id", order.ID))
+	}
+
 	return order, nil
 }
 

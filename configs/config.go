@@ -9,6 +9,15 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	SQS      SQSConfig
+}
+
+type SQSConfig struct {
+	Region      string
+	EndpointURL string
+	QueueURL    string
+	AccessKey   string
+	SecretKey   string
 }
 
 type ServerConfig struct {
@@ -41,6 +50,13 @@ func Load() (*Config, error) {
 			Password: getEnv("DB_PASSWORD", ""),
 			DBName:   getEnv("DB_NAME", "orders"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		},
+		SQS: SQSConfig{
+			Region:      getEnv("AWS_REGION", "us-east-1"),
+			EndpointURL: getEnv("SQS_ENDPOINT", ""),
+			QueueURL:    getEnv("SQS_QUEUE_URL", ""),
+			AccessKey:   getEnv("AWS_ACCESS_KEY_ID", ""),
+			SecretKey:   getEnv("AWS_SECRET_ACCESS_KEY", ""),
 		},
 	}, nil
 }

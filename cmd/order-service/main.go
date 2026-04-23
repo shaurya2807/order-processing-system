@@ -18,6 +18,7 @@ import (
 	"github.com/shaurya2807/order-processing-system/internal/repository"
 	"github.com/shaurya2807/order-processing-system/internal/service"
 	"github.com/shaurya2807/order-processing-system/pkg/logger"
+	"github.com/shaurya2807/order-processing-system/pkg/queue"
 	"go.uber.org/zap"
 )
 
@@ -53,8 +54,20 @@ func main() {
 		zap.String("db", cfg.Database.DBName),
 	)
 
+	sqsPublisher, err := queue.NewPublisher(ctx,
+		cfg.SQS.Region,
+		cfg.SQS.EndpointURL,
+		cfg.SQS.QueueURL,
+		cfg.SQS.AccessKey,
+		cfg.SQS.SecretKey,
+	)
+	if err != nil {
+		log.Fatal("failed to create sqs publisher", zap.Error(err))
+	}
+	log.Info("sqs publisher initialized", zap.String("queue_url", cfg.SQS.QueueURL))
+
 	orderRepo := repository.NewOrderRepository(db)
-	orderSvc := service.NewOrderService(orderRepo, log)
+	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, log)
 	orderHandler := handler.NewOrderHandler(orderSvc, log)
 
 	if os.Getenv("APP_ENV") == "production" {
