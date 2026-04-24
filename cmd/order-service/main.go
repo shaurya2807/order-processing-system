@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,11 +19,13 @@ import (
 	"github.com/shaurya2807/order-processing-system/internal/repository"
 	"github.com/shaurya2807/order-processing-system/internal/service"
 	"github.com/shaurya2807/order-processing-system/pkg/cache"
+	orderpb "github.com/shaurya2807/order-processing-system/pkg/grpc"
 	"github.com/shaurya2807/order-processing-system/pkg/logger"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
 	"github.com/shaurya2807/order-processing-system/pkg/search"
 	"github.com/shaurya2807/order-processing-system/pkg/storage"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -102,6 +105,8 @@ func main() {
 	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, orderStorage, searchClient, log)
 	orderHandler := handler.NewOrderHandler(orderSvc, log)
 
+	// ── HTTP server ────────────────────────────────────────────────────────────
+
 	if os.Getenv("APP_ENV") == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -109,10 +114,9 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(requestLogger(log))
-
 	orderHandler.RegisterRoutes(r)
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
 		Handler:      r,
 		ReadTimeout:  10 * time.Second,
@@ -121,24 +125,47 @@ func main() {
 	}
 
 	go func() {
-		log.Info("server listening", zap.String("port", cfg.Server.Port))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal("server error", zap.Error(err))
+		log.Info("http server listening", zap.String("port", cfg.Server.Port))
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal("http server error", zap.Error(err))
 		}
 	}()
+
+	// ── gRPC server ───────────────────────────────────────────────────────────
+
+	const grpcPort = "50051"
+	lis, err := net.Listen("tcp", ":"+grpcPort)
+	if err != nil {
+		log.Fatal("failed to listen on grpc port", zap.String("port", grpcPort), zap.Error(err))
+	}
+
+	grpcSrv := grpc.NewServer()
+	orderpb.RegisterOrderServiceServer(grpcSrv, orderpb.NewOrderGRPCServer(orderSvc))
+
+	go func() {
+		log.Info("grpc server listening", zap.String("port", grpcPort))
+		if err := grpcSrv.Serve(lis); err != nil {
+			log.Fatal("grpc server error", zap.Error(err))
+		}
+	}()
+
+	// ── Graceful shutdown ─────────────────────────────────────────────────────
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Info("shutting down server...")
+	log.Info("shutting down servers...")
+
+	grpcSrv.GracefulStop()
+	log.Info("grpc server stopped")
+
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := srv.Shutdown(shutCtx); err != nil {
-		log.Error("graceful shutdown failed", zap.Error(err))
+	if err := httpSrv.Shutdown(shutCtx); err != nil {
+		log.Error("http graceful shutdown failed", zap.Error(err))
 	}
-	log.Info("server stopped")
+	log.Info("http server stopped")
 }
 
 func requestLogger(log *zap.Logger) gin.HandlerFunc {

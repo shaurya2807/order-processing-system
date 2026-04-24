@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "github.com/shaurya2807/order-processing-system/pkg/grpc;orderpb";
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (OrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (OrderResponse);
+}
+
+message CreateOrderRequest {
+  int64  customer_id  = 1;
+  double total_amount = 2;
+}
+
+message GetOrderRequest {
+  int64 id = 1;
+}
+
+message OrderResponse {
+  int64  id           = 1;
+  int64  customer_id  = 2;
+  string status       = 3;
+  double total_amount = 4;
+  string created_at   = 5;
+}

@@ -1,6 +1,6 @@
 # Scalable Event-Driven Order Processing System in Go
 
-Production-style distributed microservices system with async messaging, caching, object storage, encryption, and search.
+Production-style distributed microservices system with async messaging, caching, object storage, encryption, search, and gRPC.
 
 ---
 
@@ -9,17 +9,23 @@ Production-style distributed microservices system with async messaging, caching,
 ```
 Client
   │
-  ▼
-order-service (REST API :8080)
-  │
-  ├─── PostgreSQL (persistent order storage)
-  ├─── Redis/ElastiCache (order lookup cache, 5min TTL)
-  ├─── Amazon SQS (async event publishing)
-  │         │
-  │         ├──▶ inventory-service (stock deduction)
-  │         └──▶ notification-service (email notification)
-  ├─── AWS S3 + KMS (order artifact storage, encrypted)
-  └─── OpenSearch (order indexing for search and analytics)
+  ├─── REST  :8080  ──▶ order-service
+  └─── gRPC  :50051 ──▶ order-service
+                              │
+                 ┌────────────┼────────────────────┐
+                 │            │                    │
+                 ▼            ▼                    ▼
+           PostgreSQL       Redis            Amazon SQS
+           (storage)       (cache)           (events)
+                                               │
+                              ┌────────────────┴────────────────┐
+                              ▼                                  ▼
+                    inventory-service               notification-service
+                    (stock deduction)               (email notification)
+                              
+           Also async after order creation:
+           ├─── AWS S3 + KMS  (encrypted order artifact)
+           └─── OpenSearch    (order indexed for search)
 ```
 
 ---
@@ -30,8 +36,9 @@ order-service (REST API :8080)
 |---|---|
 | Language | Go 1.26 |
 | HTTP | Gin |
-| Database | PostgreSQL (AWS RDS equivalent) |
-| Cache | Redis (AWS ElastiCache equivalent) |
+| RPC | gRPC |
+| Database | PostgreSQL (AWS RDS) |
+| Cache | Redis (AWS ElastiCache) |
 | Queue | Amazon SQS (LocalStack) |
 | Storage | AWS S3 + KMS encryption (LocalStack) |
 | Search | OpenSearch |
@@ -50,20 +57,20 @@ docker compose up
 
 This starts PostgreSQL, Redis, LocalStack, OpenSearch, order-service, inventory-service, and notification-service. The `orders` table, SQS queue, and S3 bucket are created automatically on first boot.
 
-**Create an order (bash):**
-
-```bash
-curl -X POST http://localhost:8080/orders \
-  -H "Content-Type: application/json" \
-  -d '{"customer_id": 42, "total_amount": 129.99}'
-```
-
 **Create an order (PowerShell):**
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8080/orders `
   -ContentType "application/json" `
   -Body '{"customer_id": 42, "total_amount": 129.99}'
+```
+
+**Create an order (bash):**
+
+```bash
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": 42, "total_amount": 129.99}'
 ```
 
 **Get an order:**
@@ -76,7 +83,7 @@ curl http://localhost:8080/orders/1
 
 ## API Endpoints
 
-### `POST /orders`
+### `POST /orders` — REST
 
 Creates a new order with `pending` status, persists it to PostgreSQL, and kicks off async operations: S3 upload, OpenSearch indexing, and SQS event publication.
 
@@ -101,17 +108,9 @@ Creates a new order with `pending` status, persists it to PostgreSQL, and kicks 
 }
 ```
 
-**Validation error** `400 Bad Request`
-
-```json
-{
-  "error": "Key: 'CreateOrderRequest.TotalAmount' Error:Field validation for 'TotalAmount' failed on the 'gt' tag"
-}
-```
-
 ---
 
-### `GET /orders/:id`
+### `GET /orders/:id` — REST
 
 Retrieves a single order by ID. Checks Redis first; falls back to PostgreSQL on a cache miss and repopulates the cache.
 
@@ -137,13 +136,23 @@ Retrieves a single order by ID. Checks Redis first; falls back to PostgreSQL on 
 
 ---
 
+### `CreateOrder` — gRPC :50051
+
+Creates an order via the typed gRPC interface. Equivalent to `POST /orders` but uses protobuf wire format. Proto definition: [`proto/order.proto`](proto/order.proto).
+
+### `GetOrder` — gRPC :50051
+
+Retrieves an order by ID via gRPC with the same Redis-first cache logic as the REST endpoint. Proto definition: [`proto/order.proto`](proto/order.proto).
+
+---
+
 ## Project Structure
 
 ```
 order-processing-system/
 ├── cmd/
 │   ├── order-service/
-│   │   └── main.go                   # Wires deps, starts HTTP server
+│   │   └── main.go                   # Wires deps, starts HTTP + gRPC servers
 │   ├── inventory-service/
 │   │   └── main.go                   # Starts SQS consumer loop
 │   └── notification-service/
@@ -169,6 +178,9 @@ order-processing-system/
 ├── pkg/
 │   ├── cache/
 │   │   └── redis.go                  # Redis client — get/set/delete with 5min TTL
+│   ├── grpc/
+│   │   ├── server.go                 # gRPC server implementation
+│   │   └── order_grpc.go             # Generated protobuf types and service descriptors
 │   ├── logger/
 │   │   └── logger.go                 # Zap logger factory
 │   ├── queue/
@@ -177,6 +189,8 @@ order-processing-system/
 │   │   └── opensearch.go             # OpenSearch client — index and query orders
 │   └── storage/
 │       └── s3.go                     # S3 client — upload artifacts with KMS encryption
+├── proto/
+│   └── order.proto                   # Service contract: CreateOrder and GetOrder RPCs
 ├── Dockerfile.order
 ├── Dockerfile.inventory
 ├── Dockerfile.notification
@@ -188,36 +202,39 @@ order-processing-system/
 
 ---
 
-## How It Works
+## Full Flow
 
 ### `POST /orders`
 
-1. **PostgreSQL** — order is saved with `pending` status and an ID is returned.
-2. **Redis** — cache entry for that order ID is invalidated to prevent stale reads.
-3. **S3 + KMS** *(async goroutine)* — order artifact is uploaded to S3 with KMS envelope encryption; does not block the HTTP response.
-4. **OpenSearch** *(async goroutine)* — order document is indexed for search and analytics; does not block the HTTP response.
-5. **SQS** — `OrderCreated` event (order ID, customer ID, total amount) is published to `orders-queue`.
-6. **inventory-service** — polls the queue, receives the event, deducts stock, then deletes the message from SQS.
-7. **notification-service** — polls the same queue independently, receives the event, sends an email notification, then deletes the message from SQS.
+1. Order saved to PostgreSQL with `pending` status; an ID is returned.
+2. Redis cache invalidated for that order key to prevent stale reads.
+3. gRPC clients can call `CreateOrder` on `:50051` — same service, same logic.
+4. Order artifact uploaded to AWS S3 with KMS encryption *(async goroutine — does not block response)*.
+5. Order document indexed in OpenSearch *(async goroutine — does not block response)*.
+6. `OrderCreated` event (order ID, customer ID, total amount) published to Amazon SQS `orders-queue`.
+7. inventory-service polls SQS, receives the event, deducts stock, then deletes the message.
+8. notification-service polls the same queue independently, sends an email notification, then deletes the message.
 
 ### `GET /orders/:id`
 
-1. **Redis** — cache is checked first for the order.
-2. **Cache hit** — order is returned immediately (sub-millisecond latency), no database query.
-3. **Cache miss** — order is fetched from PostgreSQL, stored in Redis with a 5-minute TTL, then returned.
+1. Check Redis first for the order key (5-minute TTL).
+2. Cache hit — return immediately (~200 microseconds, no database query).
+3. Cache miss — fetch from PostgreSQL, populate Redis with 5-minute TTL, return.
 
 ---
 
 ## Key Engineering Decisions
 
-**SQS decoupling** — The order-service publishes to a queue and returns immediately. Downstream services are fully independent: if inventory-service or notification-service is down, the order still succeeds and the event is durably held until the consumer recovers.
+**gRPC for internal service contracts** — Typed proto definitions enforce a schema between callers and the service. `proto/order.proto` is the single source of truth for request/response shapes, with generated code guaranteeing wire compatibility.
 
-**Delete only after successful processing** — Consumers delete a message from SQS only after successfully handling it. A crash or error before the delete causes SQS to re-deliver the message after the visibility timeout, giving automatic at-least-once retry with no custom retry logic required.
+**SQS decoupling** — The order-service publishes to a queue and returns immediately. If inventory-service or notification-service is down, the order still succeeds and the event is durably held until the consumer recovers.
 
-**Async S3 and OpenSearch** — Uploading artifacts and indexing documents happen in background goroutines, so the HTTP response is not held hostage to the latency of those operations. Order creation stays fast even if S3 or OpenSearch is slow.
+**Delete only after successful processing** — Consumers delete a message from SQS only after successfully handling it. A crash before the delete causes SQS to re-deliver after the visibility timeout, giving automatic at-least-once retry with no custom retry logic required.
 
-**Redis cache-aside pattern** — Reads check the cache before hitting the database. Writes invalidate the cache so the next read always fetches a fresh copy from PostgreSQL. TTL is set to 5 minutes to bound staleness without requiring explicit invalidation for every update path.
+**Async S3 and OpenSearch** — Uploading artifacts and indexing documents happen in background goroutines, so the HTTP response is never held hostage to the latency of those operations. Order creation stays fast even if S3 or OpenSearch is slow.
+
+**Redis cache-aside** — Reads check the cache before hitting the database. Writes invalidate the cache so the next read always fetches a fresh copy from PostgreSQL. TTL of 5 minutes bounds staleness without requiring explicit invalidation on every update path.
 
 **KMS envelope encryption** — S3 objects are encrypted with a KMS-managed key. The data key never leaves KMS in plaintext, so even direct S3 bucket access yields only ciphertext. This satisfies compliance requirements for sensitive order data at rest.
 
-**Structured logging with Zap** — Every significant event (order received, cache hit/miss, stock deducted, notification sent, message deleted) is logged as structured JSON. This makes logs directly queryable in any log aggregation system (e.g., OpenSearch, CloudWatch Logs Insights) without parsing.
+**Structured Zap logging** — Every significant event (order received, cache hit/miss, stock deducted, notification sent, message deleted) is logged as structured JSON, making logs directly queryable in any log aggregation system (OpenSearch, CloudWatch Logs Insights, etc.) without parsing.
