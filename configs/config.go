@@ -7,11 +7,16 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	SQS      SQSConfig
-	Redis    RedisConfig
-	Storage  StorageConfig
+	Server     ServerConfig
+	Database   DatabaseConfig
+	SQS        SQSConfig
+	Redis      RedisConfig
+	Storage    StorageConfig
+	OpenSearch OpenSearchConfig
+}
+
+type OpenSearchConfig struct {
+	Endpoint string
 }
 
 type SQSConfig struct {
@@ -85,6 +90,9 @@ func Load() (*Config, error) {
 			AWSRegion:    getEnv("AWS_REGION", "us-east-1"),
 			AWSAccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
 			AWSSecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		},
+		OpenSearch: OpenSearchConfig{
+			Endpoint: getEnv("OPENSEARCH_ENDPOINT", "http://localhost:9200"),
 		},
 	}, nil
 }

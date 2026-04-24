@@ -9,16 +9,18 @@ import (
 	"github.com/shaurya2807/order-processing-system/internal/repository"
 	"github.com/shaurya2807/order-processing-system/pkg/cache"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
+	"github.com/shaurya2807/order-processing-system/pkg/search"
 	"github.com/shaurya2807/order-processing-system/pkg/storage"
 	"go.uber.org/zap"
 )
 
 type OrderService struct {
-	repo      *repository.OrderRepository
-	publisher *queue.Publisher
-	cache     *cache.Cache
-	storage   *storage.Storage
-	logger    *zap.Logger
+	repo       *repository.OrderRepository
+	publisher  *queue.Publisher
+	cache      *cache.Cache
+	storage    *storage.Storage
+	search     *search.Client
+	logger     *zap.Logger
 }
 
 func NewOrderService(
@@ -26,9 +28,10 @@ func NewOrderService(
 	publisher *queue.Publisher,
 	cache *cache.Cache,
 	storage *storage.Storage,
+	search *search.Client,
 	logger *zap.Logger,
 ) *OrderService {
-	return &OrderService{repo: repo, publisher: publisher, cache: cache, storage: storage, logger: logger}
+	return &OrderService{repo: repo, publisher: publisher, cache: cache, storage: storage, search: search, logger: logger}
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRequest) (*model.Order, error) {
@@ -55,6 +58,15 @@ func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRe
 			s.logger.Error("failed to upload order to s3",
 				zap.Int64("order_id", order.ID),
 				zap.Error(uploadErr),
+			)
+		}
+	}()
+
+	go func() {
+		if indexErr := s.search.IndexOrder(context.Background(), order); indexErr != nil {
+			s.logger.Error("failed to index order in opensearch",
+				zap.Int64("order_id", order.ID),
+				zap.Error(indexErr),
 			)
 		}
 	}()

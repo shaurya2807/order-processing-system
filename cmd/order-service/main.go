@@ -20,6 +20,7 @@ import (
 	"github.com/shaurya2807/order-processing-system/pkg/cache"
 	"github.com/shaurya2807/order-processing-system/pkg/logger"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
+	"github.com/shaurya2807/order-processing-system/pkg/search"
 	"github.com/shaurya2807/order-processing-system/pkg/storage"
 	"go.uber.org/zap"
 )
@@ -91,8 +92,14 @@ func main() {
 		zap.String("endpoint", cfg.Storage.S3Endpoint),
 	)
 
+	searchClient, err := search.New(cfg.OpenSearch.Endpoint, log)
+	if err != nil {
+		log.Fatal("failed to create opensearch client", zap.Error(err))
+	}
+	log.Info("opensearch client initialized", zap.String("endpoint", cfg.OpenSearch.Endpoint))
+
 	orderRepo := repository.NewOrderRepository(db)
-	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, orderStorage, log)
+	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, orderStorage, searchClient, log)
 	orderHandler := handler.NewOrderHandler(orderSvc, log)
 
 	if os.Getenv("APP_ENV") == "production" {
