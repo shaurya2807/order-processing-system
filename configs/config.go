@@ -10,6 +10,7 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	SQS      SQSConfig
+	Redis    RedisConfig
 }
 
 type SQSConfig struct {
@@ -18,6 +19,11 @@ type SQSConfig struct {
 	QueueURL    string
 	AccessKey   string
 	SecretKey   string
+}
+
+type RedisConfig struct {
+	Host string
+	Port string
 }
 
 type ServerConfig struct {
@@ -57,6 +63,10 @@ func Load() (*Config, error) {
 			QueueURL:    getEnv("SQS_QUEUE_URL", ""),
 			AccessKey:   getEnv("AWS_ACCESS_KEY_ID", ""),
 			SecretKey:   getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		},
+		Redis: RedisConfig{
+			Host: getEnv("REDIS_HOST", "localhost"),
+			Port: getEnv("REDIS_PORT", "6379"),
 		},
 	}, nil
 }

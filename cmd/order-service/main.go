@@ -17,6 +17,7 @@ import (
 	"github.com/shaurya2807/order-processing-system/internal/handler"
 	"github.com/shaurya2807/order-processing-system/internal/repository"
 	"github.com/shaurya2807/order-processing-system/internal/service"
+	"github.com/shaurya2807/order-processing-system/pkg/cache"
 	"github.com/shaurya2807/order-processing-system/pkg/logger"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
 	"go.uber.org/zap"
@@ -66,8 +67,14 @@ func main() {
 	}
 	log.Info("sqs publisher initialized", zap.String("queue_url", cfg.SQS.QueueURL))
 
+	redisCache := cache.New(cfg.Redis.Host, cfg.Redis.Port)
+	log.Info("redis cache initialized",
+		zap.String("host", cfg.Redis.Host),
+		zap.String("port", cfg.Redis.Port),
+	)
+
 	orderRepo := repository.NewOrderRepository(db)
-	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, log)
+	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, log)
 	orderHandler := handler.NewOrderHandler(orderSvc, log)
 
 	if os.Getenv("APP_ENV") == "production" {

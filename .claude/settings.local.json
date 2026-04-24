@@ -6,7 +6,8 @@
       "Bash(go vet *)",
       "Bash(grep -E '\\\\.\\(go|mod|env|yaml|yml|json|md\\)$')",
       "Bash(docker compose build *)",
-      "Bash(chmod +x *)"
+      "Bash(chmod +x *)",
+      "Bash(go get *)"
     ]
   }
 }
