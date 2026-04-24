@@ -1,4 +1,4 @@
-# Order Processing System
+# Scalable Event-Driven Order Processing System in Go
 
 Event-driven microservices system built with Go and AWS SQS.
 
