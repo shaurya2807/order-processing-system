@@ -20,6 +20,7 @@ import (
 	"github.com/shaurya2807/order-processing-system/pkg/cache"
 	"github.com/shaurya2807/order-processing-system/pkg/logger"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
+	"github.com/shaurya2807/order-processing-system/pkg/storage"
 	"go.uber.org/zap"
 )
 
@@ -73,8 +74,25 @@ func main() {
 		zap.String("port", cfg.Redis.Port),
 	)
 
+	orderStorage, err := storage.New(ctx,
+		cfg.Storage.S3Endpoint,
+		cfg.Storage.AWSRegion,
+		cfg.Storage.S3Bucket,
+		cfg.Storage.KMSKeyID,
+		cfg.Storage.AWSAccessKey,
+		cfg.Storage.AWSSecretKey,
+		log,
+	)
+	if err != nil {
+		log.Fatal("failed to create s3 storage", zap.Error(err))
+	}
+	log.Info("s3 storage initialized",
+		zap.String("bucket", cfg.Storage.S3Bucket),
+		zap.String("endpoint", cfg.Storage.S3Endpoint),
+	)
+
 	orderRepo := repository.NewOrderRepository(db)
-	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, log)
+	orderSvc := service.NewOrderService(orderRepo, sqsPublisher, redisCache, orderStorage, log)
 	orderHandler := handler.NewOrderHandler(orderSvc, log)
 
 	if os.Getenv("APP_ENV") == "production" {

@@ -9,6 +9,7 @@ import (
 	"github.com/shaurya2807/order-processing-system/internal/repository"
 	"github.com/shaurya2807/order-processing-system/pkg/cache"
 	"github.com/shaurya2807/order-processing-system/pkg/queue"
+	"github.com/shaurya2807/order-processing-system/pkg/storage"
 	"go.uber.org/zap"
 )
 
@@ -16,11 +17,18 @@ type OrderService struct {
 	repo      *repository.OrderRepository
 	publisher *queue.Publisher
 	cache     *cache.Cache
+	storage   *storage.Storage
 	logger    *zap.Logger
 }
 
-func NewOrderService(repo *repository.OrderRepository, publisher *queue.Publisher, cache *cache.Cache, logger *zap.Logger) *OrderService {
-	return &OrderService{repo: repo, publisher: publisher, cache: cache, logger: logger}
+func NewOrderService(
+	repo *repository.OrderRepository,
+	publisher *queue.Publisher,
+	cache *cache.Cache,
+	storage *storage.Storage,
+	logger *zap.Logger,
+) *OrderService {
+	return &OrderService{repo: repo, publisher: publisher, cache: cache, storage: storage, logger: logger}
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRequest) (*model.Order, error) {
@@ -41,6 +49,15 @@ func (s *OrderService) CreateOrder(ctx context.Context, req *model.CreateOrderRe
 	if delErr := s.cache.Delete(ctx, key); delErr != nil {
 		s.logger.Error("cache delete error", zap.String("key", key), zap.Error(delErr))
 	}
+
+	go func() {
+		if uploadErr := s.storage.UploadOrder(context.Background(), order); uploadErr != nil {
+			s.logger.Error("failed to upload order to s3",
+				zap.Int64("order_id", order.ID),
+				zap.Error(uploadErr),
+			)
+		}
+	}()
 
 	event := queue.OrderCreatedEvent{
 		OrderID:     order.ID,

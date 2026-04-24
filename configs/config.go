@@ -11,6 +11,7 @@ type Config struct {
 	Database DatabaseConfig
 	SQS      SQSConfig
 	Redis    RedisConfig
+	Storage  StorageConfig
 }
 
 type SQSConfig struct {
@@ -24,6 +25,15 @@ type SQSConfig struct {
 type RedisConfig struct {
 	Host string
 	Port string
+}
+
+type StorageConfig struct {
+	S3Endpoint   string
+	S3Bucket     string
+	KMSKeyID     string
+	AWSRegion    string
+	AWSAccessKey string
+	AWSSecretKey string
 }
 
 type ServerConfig struct {
@@ -67,6 +77,14 @@ func Load() (*Config, error) {
 		Redis: RedisConfig{
 			Host: getEnv("REDIS_HOST", "localhost"),
 			Port: getEnv("REDIS_PORT", "6379"),
+		},
+		Storage: StorageConfig{
+			S3Endpoint:   getEnv("S3_ENDPOINT", ""),
+			S3Bucket:     getEnv("S3_BUCKET", "order-artifacts"),
+			KMSKeyID:     getEnv("KMS_KEY_ID", ""),
+			AWSRegion:    getEnv("AWS_REGION", "us-east-1"),
+			AWSAccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
+			AWSSecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
 		},
 	}, nil
 }

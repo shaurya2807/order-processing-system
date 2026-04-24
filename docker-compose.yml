@@ -25,7 +25,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      SERVICES: sqs
+      SERVICES: sqs, s3, kms
     volumes:
       - ./init/localstack-init.sh:/etc/localstack/init/ready.d/init.sh
     healthcheck:
@@ -62,6 +62,9 @@ services:
       SQS_QUEUE_URL: http://localstack:4566/000000000000/orders-queue
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      S3_ENDPOINT: http://localstack:4566
+      S3_BUCKET: order-artifacts
+      KMS_KEY_ID: dummy-kms-key
     depends_on:
       postgres:
         condition: service_healthy
